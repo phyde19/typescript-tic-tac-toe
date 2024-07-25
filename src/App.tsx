@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import React, { createContext, useContext, useReducer, useEffect } from 'react';
 import './App.css';
 import clsx from 'clsx';
 
@@ -10,15 +10,97 @@ type Board = [
 ]
 type Player = 'x' | 'o';
 
-type GameBoardProps = {
+// Define the state shape
+interface GameState {
   board: Board;
-  onSelectMove: (rowIndex: number, colIndex: number) => void;
+  currPlayer: Player;
+  outcome: string | null;
 }
 
-function GameBoard({ board, onSelectMove }: GameBoardProps) {
+// Define action types
+type Action = 
+  | { type: 'MAKE_MOVE', payload: { rowIndex: number, colIndex: number } }
+  | { type: 'RESET_GAME' };
+
+// Create the context
+const GameContext = createContext<{
+  state: GameState;
+  dispatch: React.Dispatch<Action>;
+} | undefined>(undefined);
+
+// Initial state
+const initialState: GameState = {
+  board: [
+    ["", "", ""],
+    ["", "", ""],
+    ["", "", ""]
+  ],
+  currPlayer: 'x',
+  outcome: null,
+};
+
+// Reducer function
+function gameReducer(state: GameState, action: Action): GameState {
+  switch (action.type) {
+    case 'MAKE_MOVE':
+      const { rowIndex, colIndex } = action.payload;
+      if (state.board[rowIndex][colIndex] !== "" || state.outcome) {
+        return state;
+      }
+      const newBoard = state.board.map(row => [...row]) as Board;
+      newBoard[rowIndex][colIndex] = state.currPlayer;
+      return {
+        ...state,
+        board: newBoard,
+        currPlayer: state.currPlayer === 'x' ? 'o' : 'x',
+      };
+    case 'RESET_GAME':
+      return initialState;
+    default:
+      return state;
+  }
+}
+
+// Game provider component
+function GameProvider({ children }: { children: React.ReactNode }) {
+  const [state, dispatch] = useReducer(gameReducer, initialState);
+
+  useEffect(() => {
+    const { isGameOver, hasWinner, winner } = checkGameState(state.board);
+    if (isGameOver && !hasWinner) {
+      state.outcome = 'Cat\'s game!';
+    } else if (isGameOver && hasWinner) {
+      state.outcome = `${winner} wins!`;
+    }
+  }, [state.board]);
+
+  return (
+    <GameContext.Provider value={{ state, dispatch }}>
+      {children}
+    </GameContext.Provider>
+  );
+}
+
+// Custom hook to use the game context
+function useGame() {
+  const context = useContext(GameContext);
+  if (context === undefined) {
+    throw new Error('useGame must be used within a GameProvider');
+  }
+  return context;
+}
+
+// GameBoard component
+function GameBoard() {
+  const { state, dispatch } = useGame();
+
+  const handleSelectMove = (rowIndex: number, colIndex: number) => {
+    dispatch({ type: 'MAKE_MOVE', payload: { rowIndex, colIndex } });
+  };
+
   return (
     <div className="board">
-      {board.map((row, rowIndex) => (
+      {state.board.map((row, rowIndex) => (
         <div key={rowIndex} className="board-row">
           {row.map((symbol, colIndex) => (
             <div 
@@ -29,7 +111,7 @@ function GameBoard({ board, onSelectMove }: GameBoardProps) {
                 colIndex > 0 && "border-left",
                 colIndex < 2 && "border-right"
               )}
-              onClick={() => onSelectMove(rowIndex, colIndex)}
+              onClick={() => handleSelectMove(rowIndex, colIndex)}
               key={`${rowIndex}${colIndex}`}
             >
               {symbol}
@@ -41,91 +123,22 @@ function GameBoard({ board, onSelectMove }: GameBoardProps) {
   );
 }
 
-function App() {
-  const [board, setBoard] = useState<Board>([
-    ["", "", ""],
-    ["", "", ""],
-    ["", "", ""]
-  ]);
+// ResetBtn component
+function ResetBtn() {
+  const { state, dispatch } = useGame();
 
-  const [currPlayer, setCurrentPlayer] = useState<Player>("x");
-  
-  const [outcome, setOutcome] = useState<string | null>(null);
-
-  useEffect(() => {
-    const {
-      isGameOver, 
-      hasWinner,
-      winner
-    } = checkGameState(board);
-
-    if (isGameOver && !hasWinner) {
-      setOutcome('Cat\'s game!');
-    } else if (isGameOver && hasWinner) {
-      setOutcome(`${winner} wins!`);
-    } 
-  }, [board]);
-
-  const handleSelectMove = (i: number, j: number) => {
-    if (board[i][j] !== "") {
-      return;
-    }
-    setBoard(prevBoard => {
-      const newBoard: Board = [
-        [...prevBoard[0]],
-        [...prevBoard[1]],
-        [...prevBoard[2]]
-      ]
-      newBoard[i][j] = currPlayer;
-      return newBoard;
-    });
-
-    setCurrentPlayer(prev => prev === "x" ? "o" : "x");
-  };
+  const isBoardEmpty = state.board.every(row => row.every(cell => cell === ''));
 
   const handleReset = () => {
-    setBoard([
-      ["", "", ""],
-      ["", "", ""],
-      ["", "", ""]
-    ]);
-    setOutcome(null);
-    setCurrentPlayer('x');
+    dispatch({ type: 'RESET_GAME' });
   };
-
-  return (
-    <div className="app">
-      {outcome && (
-        <span className="gameover-message">{outcome}</span>
-      )}
-
-      <GameBoard 
-        board={board} 
-        onSelectMove={handleSelectMove}
-      />
-
-      <ResetBtn
-        board={board}
-        onReset={handleReset}
-      />
-    </div>
-  );
-}
-
-type ResetBtnProps = {
-  board: Board;
-  onReset: () => void;
-}
-
-function ResetBtn({ board, onReset }: ResetBtnProps) {
-  const isBoardEmpty = board.every(row => row.every(cell => cell === ''));
 
   return (
     <>
       {!isBoardEmpty && (
         <button
           className="reset-btn"
-          onClick={onReset}
+          onClick={handleReset}
         >
           Reset
         </button>
@@ -134,13 +147,38 @@ function ResetBtn({ board, onReset }: ResetBtnProps) {
   );
 }
 
-type GameState = {
+// App component
+function App() {
+  return (
+    <GameProvider>
+      <GameContent />
+    </GameProvider>
+  );
+}
+
+// GameContent component
+function GameContent() {
+  const { state } = useGame();
+
+  return (
+    <div className="app">
+      {state.outcome && (
+        <span className="gameover-message">{state.outcome}</span>
+      )}
+      <GameBoard />
+      <ResetBtn />
+    </div>
+  );
+}
+
+// Utility functions (unchanged)
+type CheckGameState = {
   isGameOver: boolean;
   hasWinner: boolean;
   winner: Cell | null;
 }
 
-function checkGameState(board: Board): GameState {
+function checkGameState(board: Board): CheckGameState {
   const paths = getAllPaths(board);
   const winningPath = paths.find(path => isWinningPath(path));
   if (winningPath) {
